@@ -50,7 +50,7 @@ use compression::CompressedPointReader;
 
 use std::fmt::Debug;
 use thiserror::Error;
-use vlr::copc::CopcData;
+use vlr::copc::{self, CopcData};
 use {raw, Builder, Header, Point, Result, Vlr};
 
 /// Error while reading.
@@ -301,10 +301,12 @@ impl Reader {
         mut read: R,
     ) -> Result<Reader> {
         let raw_header = raw::Header::read_from(&mut read)?;
-        let number_of_variable_length_records = raw_header.number_of_variable_length_records;
         if raw_header.header_size != 375 {
             return Err(Error::InvalidCopc.into());
         }
+        let number_of_variable_length_records = raw_header.number_of_variable_length_records;
+        let start_of_first_evlr = raw_header.evlr.map(|evlr| evlr.start_of_first_evlr);
+        let number_of_evlrs = raw_header.evlr.map(|evlr| evlr.number_of_evlrs);
         let offset_to_point_data = u64::from(raw_header.offset_to_point_data);
 
         let mut builder = Builder::new(raw_header)?;
@@ -316,13 +318,26 @@ impl Reader {
 
         if number_of_variable_length_records < 1
             || builder.vlrs[0].user_id != "entwine"
+            || builder.vlrs[0].record_id != 1
             || builder.vlrs[0].data.len() != 160
         {
             return Err(Error::InvalidCopc.into());
         }
-        let _copc = CopcData::read_from(Cursor::new(&builder.vlrs[0].data));
+        let copc = CopcData::read_from(Cursor::new(&builder.vlrs[0].data))?;
+
+        if let Some(offset) = start_of_first_evlr {
+            read.seek(SeekFrom::Start(offset))?;
+            for _ in 0..number_of_evlrs.unwrap() {
+                let evlr = raw::Vlr::read_from(&mut read, true).map(Vlr::new)?;
+                builder.evlrs.push(evlr);
+            }
+        }
+        let _hier_root_page =
+            copc::Page::read_from(Cursor::new(&builder.evlrs[0].data), copc.root_hier_size)?;
 
         let header = builder.into_header()?;
+
+        read.seek(SeekFrom::Start(offset_to_point_data))?;
 
         if header.point_format().is_compressed {
             Ok(Reader {

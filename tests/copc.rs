@@ -27,4 +27,11 @@ fn read_copc_header() {
         vlrs,
         ["entwine", "laszip encoded", "LASF_Projection", "LASF_Spec"]
     );
+
+    let evlrs: Vec<&str> = header
+        .evlrs()
+        .iter()
+        .map(|vlr| vlr.user_id.as_str())
+        .collect();
+    assert_eq!(evlrs, ["entwine"]);
 }
