@@ -97,7 +97,6 @@ impl<'a, R: Read + Seek + Send> PointReader for CompressedPointReader<'a, R> {
     }
 }
 
-
 fn laz_vlr_from_point_format(point_format: &crate::point::Format) -> LazVlr {
     let mut laz_items = laz::las::laszip::LazItemRecordBuilder::new();
     if !point_format.is_extended {
@@ -112,9 +111,7 @@ fn laz_vlr_from_point_format(point_format: &crate::point::Format) -> LazVlr {
         }
 
         if point_format.extra_bytes > 0 {
-            laz_items.add_item(laz::LazItemType::Byte(
-                point_format.extra_bytes,
-            ));
+            laz_items.add_item(laz::LazItemType::Byte(point_format.extra_bytes));
         }
     } else {
         laz_items.add_item(laz::LazItemType::Point14);
@@ -128,9 +125,7 @@ fn laz_vlr_from_point_format(point_format: &crate::point::Format) -> LazVlr {
             }
         }
         if point_format.extra_bytes > 0 {
-            laz_items.add_item(laz::LazItemType::Byte14(
-                point_format.extra_bytes,
-            ));
+            laz_items.add_item(laz::LazItemType::Byte14(point_format.extra_bytes));
         }
     }
     laz::LazVlr::from_laz_items(laz_items.build())
