@@ -32,6 +32,8 @@
 use thiserror::Error;
 use {raw, Result};
 
+pub mod copc;
+
 const REGULAR_HEADER_SIZE: usize = 54;
 const EXTENDED_HEADER_SIZE: usize = 60;
 

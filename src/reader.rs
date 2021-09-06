@@ -42,7 +42,7 @@
 //! ```
 
 use std::fs::File;
-use std::io::{BufReader, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Seek, SeekFrom};
 use std::path::Path;
 
 #[cfg(feature = "laz")]
@@ -50,6 +50,7 @@ use compression::CompressedPointReader;
 
 use std::fmt::Debug;
 use thiserror::Error;
+use vlr::copc::CopcData;
 use {raw, Builder, Header, Point, Result, Vlr};
 
 /// Error while reading.
@@ -62,6 +63,10 @@ pub enum Error {
     /// The offset to the start of the evlrs is too small.
     #[error("offset to the start of the evlrs is too small: {0}")]
     OffsetToEvlrsTooSmall(u64),
+
+    /// The offset to the start of the evlrs is too small.
+    #[error("invalid COPC format")]
+    InvalidCopc,
 }
 
 #[inline]
@@ -280,6 +285,60 @@ impl Reader {
             })
         }
     }
+    /// Creates a new COPC reader.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io::BufReader;
+    /// use std::fs::File;
+    /// # use las::Reader;
+    /// let file = File::open("tests/data/autzen-classified.copc.laz").unwrap();
+    /// let reader = Reader::new_copc(BufReader::new(file)).unwrap();
+    /// ```
+    #[cfg(feature = "laz")]
+    pub fn new_copc<R: std::io::Read + Seek + Send + Debug + 'static>(
+        mut read: R,
+    ) -> Result<Reader> {
+        let raw_header = raw::Header::read_from(&mut read)?;
+        let number_of_variable_length_records = raw_header.number_of_variable_length_records;
+        if raw_header.header_size != 375 {
+            return Err(Error::InvalidCopc.into());
+        }
+        let offset_to_point_data = u64::from(raw_header.offset_to_point_data);
+
+        let mut builder = Builder::new(raw_header)?;
+
+        for _ in 0..number_of_variable_length_records {
+            let vlr = raw::Vlr::read_from(&mut read, false).map(Vlr::new)?;
+            builder.vlrs.push(vlr);
+        }
+
+        if number_of_variable_length_records < 1
+            || builder.vlrs[0].user_id != "entwine"
+            || builder.vlrs[0].data.len() != 160
+        {
+            return Err(Error::InvalidCopc.into());
+        }
+        let _copc = CopcData::read_from(Cursor::new(&builder.vlrs[0].data));
+
+        let header = builder.into_header()?;
+
+        if header.point_format().is_compressed {
+            Ok(Reader {
+                point_reader: Box::new(CompressedPointReader::new(read, header)?),
+            })
+        } else {
+            Ok(Reader {
+                point_reader: Box::new(UncompressedPointReader {
+                    source: read,
+                    header,
+                    offset_to_point_data,
+                    last_point_idx: 0,
+                }),
+            })
+        }
+    }
 }
 
 impl Read for Reader {
@@ -321,6 +380,22 @@ impl Reader {
         File::open(path)
             .map_err(::Error::from)
             .and_then(|file| Reader::new(BufReader::new(file)))
+    }
+    /// Creates a new COPC reader from a path.
+    ///
+    /// The underlying `File` is wrapped in a `BufReader` for performance reasons.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use las::Reader;
+    /// let reader = Reader::copc_from_path("tests/data/autzen-classified.copc.laz").unwrap();
+    /// ```
+    #[cfg(feature = "laz")]
+    pub fn copc_from_path<P: AsRef<Path>>(path: P) -> Result<Reader> {
+        File::open(path)
+            .map_err(::Error::from)
+            .and_then(|file| Reader::new_copc(BufReader::new(file)))
     }
 }
 
