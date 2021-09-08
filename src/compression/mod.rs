@@ -36,14 +36,15 @@ fn create_laszip_vlr(laszip_vlr: &LazVlr) -> std::io::Result<Vlr> {
 pub(crate) struct CompressedPointReader<'a, R: Read + Seek + Send> {
     /// decompressor that does the actual job
     decompressor: laz::las::laszip::LasZipDecompressor<'a, R>,
-    pub header: Header,
+    header: Header,
     /// in-memory buffer where the decompressor writes decompression result
     decompressor_output: Cursor<Vec<u8>>,
+    point_count: u64,
     last_point_idx: u64,
 }
 
 impl<'a, R: Read + Seek + Send> CompressedPointReader<'a, R> {
-    pub(crate) fn new(source: R, header: Header) -> Result<Self> {
+    pub(crate) fn new(source: R, header: Header, point_count: u64) -> Result<Self> {
         let laszip_vlr = match header.vlrs().iter().find(|vlr| is_laszip_vlr(*vlr)) {
             None => return Err(Error::LasZipVlrNotFound),
             Some(ref vlr) => laz::las::laszip::LazVlr::from_buffer(&vlr.data)?,
@@ -54,6 +55,7 @@ impl<'a, R: Read + Seek + Send> CompressedPointReader<'a, R> {
             decompressor: laz::las::laszip::LasZipDecompressor::new(source, laszip_vlr)?,
             header,
             decompressor_output,
+            point_count,
             last_point_idx: 0,
         })
     }
@@ -70,8 +72,11 @@ impl<'a, R: Read + Seek + Send> Debug for CompressedPointReader<'a, R> {
 }
 
 impl<'a, R: Read + Seek + Send> PointReader for CompressedPointReader<'a, R> {
+    fn set_point_count(&mut self, point_count: u64) {
+        self.point_count = point_count;
+    }
     fn read_next(&mut self) -> Option<Result<Point>> {
-        if self.last_point_idx < self.header.number_of_points() {
+        if self.last_point_idx < self.point_count {
             self.last_point_idx += 1;
             self.decompressor
                 .decompress_one(&mut self.decompressor_output.get_mut())

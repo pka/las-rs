@@ -1,7 +1,8 @@
 //! COPC VLR.
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use reader::{PointIterator, PointReader, UncompressedPointReader};
+use compression::CompressedPointReader;
+use reader::{PointIterator, PointReader};
 use std::io::{Cursor, Read, Seek};
 use Header;
 use Result;
@@ -135,22 +136,20 @@ impl Page {
 
 /// Page reader
 #[derive(Debug)]
-pub struct PageReader<R: Read + Seek + Send + std::fmt::Debug> {
+pub struct PageReader {
     pages: Vec<Page>,
     copc: CopcData,
-    point_reader: UncompressedPointReader<R>,
+    point_reader: Box<dyn PointReader>,
 }
 
-impl<R: Read + Seek + Send + std::fmt::Debug> PageReader<R> {
-    pub(crate) fn new(source: R, header: Header, copc: CopcData) -> Result<Self> {
+impl PageReader {
+    pub(crate) fn new<R: 'static + Read + Seek + Send + std::fmt::Debug>(
+        source: R,
+        header: Header,
+        copc: CopcData,
+    ) -> Result<Self> {
         let root_page = Page::read_from(Cursor::new(&header.evlrs()[0].data), copc.root_hier_size)?;
-        let point_reader = UncompressedPointReader {
-            source,
-            header,
-            point_count: 0,
-            offset_to_point_data: 0,
-            last_point_idx: 0,
-        };
+        let point_reader = Box::new(CompressedPointReader::new(source, header, 0)?);
         Ok(PageReader {
             pages: vec![root_page],
             copc,
@@ -159,18 +158,15 @@ impl<R: Read + Seek + Send + std::fmt::Debug> PageReader<R> {
     }
     /// LAS header
     pub fn header(&self) -> &Header {
-        &self.point_reader.header
+        &self.point_reader.header()
     }
     /// Returns an iterator over points.
     pub fn points(&mut self, level: i32, x: i32, y: i32, z: i32) -> PointIterator {
         let entry = self.page_entry(level, x, y, z);
-        let offset = entry.offset;
         let point_count = entry.point_count as u64; // FIXME
-        self.point_reader.offset_to_point_data = offset;
-        self.point_reader.point_count = point_count;
-        self.point_reader.seek(0).unwrap(); // FIXME
+        self.point_reader.set_point_count(point_count);
         PointIterator {
-            point_reader: &mut self.point_reader,
+            point_reader: &mut *self.point_reader,
         }
     }
     fn page_entry(&self, _level: i32, _x: i32, _y: i32, _z: i32) -> &Entry {

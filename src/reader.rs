@@ -81,6 +81,7 @@ pub(crate) fn read_point_from<R: std::io::Read>(
 
 /// Trait to specify behaviour a a PointReader
 pub(crate) trait PointReader: Debug + Send {
+    fn set_point_count(&mut self, point_count: u64);
     fn read_next(&mut self) -> Option<Result<Point>>;
     fn seek(&mut self, position: u64) -> Result<()>;
     fn header(&self) -> &Header;
@@ -103,16 +104,19 @@ impl<'a> Iterator for PointIterator<'a> {
 }
 
 #[derive(Debug)]
-pub(crate) struct UncompressedPointReader<R: std::io::Read + Seek> {
-    pub source: R,
-    pub header: Header,
-    pub point_count: u64,
-    pub offset_to_point_data: u64,
+struct UncompressedPointReader<R: std::io::Read + Seek> {
+    source: R,
+    header: Header,
+    point_count: u64,
+    offset_to_point_data: u64,
     /// index of the last point read
-    pub last_point_idx: u64,
+    last_point_idx: u64,
 }
 
 impl<R: std::io::Read + Seek + Debug + Send> PointReader for UncompressedPointReader<R> {
+    fn set_point_count(&mut self, point_count: u64) {
+        self.point_count = point_count;
+    }
     fn read_next(&mut self) -> Option<Result<Point>> {
         if self.last_point_idx < self.point_count {
             self.last_point_idx += 1;
@@ -256,15 +260,15 @@ impl Reader {
         read.seek(SeekFrom::Start(offset_to_point_data))?;
 
         let header = builder.into_header()?;
+        let point_count = header.number_of_points();
 
         #[cfg(feature = "laz")]
         {
             if header.point_format().is_compressed {
                 Ok(Reader {
-                    point_reader: Box::new(CompressedPointReader::new(read, header)?),
+                    point_reader: Box::new(CompressedPointReader::new(read, header, point_count)?),
                 })
             } else {
-                let point_count = header.number_of_points();
                 Ok(Reader {
                     point_reader: Box::new(UncompressedPointReader {
                         source: read,
@@ -278,7 +282,6 @@ impl Reader {
         }
         #[cfg(not(feature = "laz"))]
         {
-            let point_count = header.number_of_points();
             Ok(Reader {
                 point_reader: Box::new(UncompressedPointReader {
                     source: read,
@@ -304,7 +307,7 @@ impl Reader {
     #[cfg(feature = "laz")]
     pub fn new_copc<R: std::io::Read + Seek + Send + Debug + 'static>(
         mut read: R,
-    ) -> Result<copc::PageReader<R>> {
+    ) -> Result<copc::PageReader> {
         let raw_header = raw::Header::read_from(&mut read)?;
         if raw_header.header_size != 375 {
             return Err(Error::InvalidCopc.into());
@@ -312,6 +315,7 @@ impl Reader {
         let number_of_variable_length_records = raw_header.number_of_variable_length_records;
         let start_of_first_evlr = raw_header.evlr.map(|evlr| evlr.start_of_first_evlr);
         let number_of_evlrs = raw_header.evlr.map(|evlr| evlr.number_of_evlrs);
+        let offset_to_point_data = u64::from(raw_header.offset_to_point_data);
 
         let mut builder = Builder::new(raw_header)?;
 
@@ -336,6 +340,9 @@ impl Reader {
                 builder.evlrs.push(evlr);
             }
         }
+
+        // Required for LasZipDecompressor initialization
+        read.seek(SeekFrom::Start(offset_to_point_data))?;
 
         let header = builder.into_header()?;
 
@@ -394,7 +401,7 @@ impl Reader {
     /// let reader = Reader::copc_from_path("tests/data/autzen-classified.copc.laz").unwrap();
     /// ```
     #[cfg(feature = "laz")]
-    pub fn copc_from_path<P: AsRef<Path>>(path: P) -> Result<copc::PageReader<BufReader<File>>> {
+    pub fn copc_from_path<P: AsRef<Path>>(path: P) -> Result<copc::PageReader> {
         File::open(path)
             .map_err(::Error::from)
             .and_then(|file| Reader::new_copc(BufReader::new(file)))
