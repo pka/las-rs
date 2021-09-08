@@ -1,7 +1,5 @@
 extern crate las;
 
-use las::Read;
-
 #[test]
 #[ignore]
 fn read_laz_header() {
@@ -15,7 +13,7 @@ fn read_laz_header() {
 #[test]
 #[ignore]
 fn read_copc_header() {
-    let reader = las::Reader::copc_from_path("tests/data/autzen-classified.copc.laz")
+    let mut reader = las::Reader::copc_from_path("tests/data/autzen-classified.copc.laz")
         .expect("Cannot open reader");
     let header = reader.header();
     let vlrs: Vec<&str> = header
@@ -34,4 +32,7 @@ fn read_copc_header() {
         .map(|vlr| vlr.user_id.as_str())
         .collect();
     assert_eq!(evlrs, ["entwine"]);
+
+    let points: Vec<las::Point> = reader.points(0, 0, 0, 0).map(|r| r.unwrap()).collect();
+    assert_eq!(points.len(), 61074);
 }

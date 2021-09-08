@@ -36,7 +36,7 @@ fn create_laszip_vlr(laszip_vlr: &LazVlr) -> std::io::Result<Vlr> {
 pub(crate) struct CompressedPointReader<'a, R: Read + Seek + Send> {
     /// decompressor that does the actual job
     decompressor: laz::las::laszip::LasZipDecompressor<'a, R>,
-    header: Header,
+    pub header: Header,
     /// in-memory buffer where the decompressor writes decompression result
     decompressor_output: Cursor<Vec<u8>>,
     last_point_idx: u64,

@@ -91,7 +91,7 @@ pub(crate) trait PointReader: Debug + Send {
 /// This struct is generally created by calling `points()` on `Reader`.
 #[derive(Debug)]
 pub struct PointIterator<'a> {
-    point_reader: &'a mut dyn PointReader,
+    pub(crate) point_reader: &'a mut dyn PointReader,
 }
 
 impl<'a> Iterator for PointIterator<'a> {
@@ -103,17 +103,18 @@ impl<'a> Iterator for PointIterator<'a> {
 }
 
 #[derive(Debug)]
-struct UncompressedPointReader<R: std::io::Read + Seek> {
-    source: R,
-    header: Header,
-    offset_to_point_data: u64,
+pub(crate) struct UncompressedPointReader<R: std::io::Read + Seek> {
+    pub source: R,
+    pub header: Header,
+    pub point_count: u64,
+    pub offset_to_point_data: u64,
     /// index of the last point read
-    last_point_idx: u64,
+    pub last_point_idx: u64,
 }
 
 impl<R: std::io::Read + Seek + Debug + Send> PointReader for UncompressedPointReader<R> {
     fn read_next(&mut self) -> Option<Result<Point>> {
-        if self.last_point_idx < self.header.number_of_points() {
+        if self.last_point_idx < self.point_count {
             self.last_point_idx += 1;
             Some(read_point_from(&mut self.source, &self.header))
         } else {
@@ -263,10 +264,12 @@ impl Reader {
                     point_reader: Box::new(CompressedPointReader::new(read, header)?),
                 })
             } else {
+                let point_count = header.number_of_points();
                 Ok(Reader {
                     point_reader: Box::new(UncompressedPointReader {
                         source: read,
                         header,
+                        point_count,
                         offset_to_point_data,
                         last_point_idx: 0,
                     }),
@@ -275,10 +278,12 @@ impl Reader {
         }
         #[cfg(not(feature = "laz"))]
         {
+            let point_count = header.number_of_points();
             Ok(Reader {
                 point_reader: Box::new(UncompressedPointReader {
                     source: read,
                     header,
+                    point_count,
                     offset_to_point_data,
                     last_point_idx: 0,
                 }),
@@ -299,7 +304,7 @@ impl Reader {
     #[cfg(feature = "laz")]
     pub fn new_copc<R: std::io::Read + Seek + Send + Debug + 'static>(
         mut read: R,
-    ) -> Result<Reader> {
+    ) -> Result<copc::PageReader<R>> {
         let raw_header = raw::Header::read_from(&mut read)?;
         if raw_header.header_size != 375 {
             return Err(Error::InvalidCopc.into());
@@ -307,7 +312,6 @@ impl Reader {
         let number_of_variable_length_records = raw_header.number_of_variable_length_records;
         let start_of_first_evlr = raw_header.evlr.map(|evlr| evlr.start_of_first_evlr);
         let number_of_evlrs = raw_header.evlr.map(|evlr| evlr.number_of_evlrs);
-        let offset_to_point_data = u64::from(raw_header.offset_to_point_data);
 
         let mut builder = Builder::new(raw_header)?;
 
@@ -332,27 +336,10 @@ impl Reader {
                 builder.evlrs.push(evlr);
             }
         }
-        let _hier_root_page =
-            copc::Page::read_from(Cursor::new(&builder.evlrs[0].data), copc.root_hier_size)?;
 
         let header = builder.into_header()?;
 
-        read.seek(SeekFrom::Start(offset_to_point_data))?;
-
-        if header.point_format().is_compressed {
-            Ok(Reader {
-                point_reader: Box::new(CompressedPointReader::new(read, header)?),
-            })
-        } else {
-            Ok(Reader {
-                point_reader: Box::new(UncompressedPointReader {
-                    source: read,
-                    header,
-                    offset_to_point_data,
-                    last_point_idx: 0,
-                }),
-            })
-        }
+        Ok(copc::PageReader::new(read, header, copc)?)
     }
 }
 
@@ -407,7 +394,7 @@ impl Reader {
     /// let reader = Reader::copc_from_path("tests/data/autzen-classified.copc.laz").unwrap();
     /// ```
     #[cfg(feature = "laz")]
-    pub fn copc_from_path<P: AsRef<Path>>(path: P) -> Result<Reader> {
+    pub fn copc_from_path<P: AsRef<Path>>(path: P) -> Result<copc::PageReader<BufReader<File>>> {
         File::open(path)
             .map_err(::Error::from)
             .and_then(|file| Reader::new_copc(BufReader::new(file)))
